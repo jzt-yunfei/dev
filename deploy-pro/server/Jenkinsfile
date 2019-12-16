@@ -1,0 +1,59 @@
+#!/usr/bin/env groovy
+
+pipeline {
+	//确认节点
+	agent {
+		node {
+			label 'jenkins_slave_01'
+		}
+	}
+
+
+	parameters {
+        	choice(name: 'git_b', choices: ['develop'], description: 'GIT 分支')
+        	choice(name: 'server_name', choices: ['dy-pc', 'dy-test'], description: '服务名称')
+        	// choice(name: 'k8s_namespace', choices: ['douya-test'], description: 'K8S 命名空间')
+        	choice(name: 'docker_re', choices: ['registry-vpc.cn-beijing.aliyuncs.com'], description: 'Docker仓库')
+        	choice(name: 'registy_name', choices: ['develop'], description: 'Docker仓库名称')
+	}
+
+	environment {
+        	docker_image_tag = sh(returnStdout: true, script: 'date +%Y%m%d%H%M%y').trim()
+		docker_iamge_name = "${params.docker_re}/${params.registy_name}/${params.server_name}:${docker_image_tag}"
+    	}
+
+	stages {
+		//拉取代码
+		stage('更新代码') {
+			steps {
+				echo "Checkout"
+				git branch: "${params.git_b}", 
+				credentialsId: '2ab2d60a-50cf-4d6a-a842-61b8acb71a70', 
+				url: 'git@code.aliyun.com:douyaProject/douya-server.git'
+			}	
+		}	
+
+		//构建生成 docker image
+		stage('构建Docker镜像') {
+			steps {
+				echo "build jar image"
+				sh "cp config-dir/test/application.yml douya-server-boot/src/main/resources/config/application.yml"
+				sh "source /etc/profile && mvn clean package"
+				//sh "wget -O Dockerfile https://code.aliyun.com/douyaProject/deploy-test/blob/master/deploy-test/Dockerfile"
+				sh "docker build -t ${docker_iamge_name} ."
+				sh "docker push ${docker_iamge_name}"
+				sh "docker rmi -f ${docker_iamge_name}"
+			}
+		}
+		//部署 Docker imager 到 kubernets
+		stage('部署Kubernets') {
+			steps {
+				echo "deploy Kubernets"
+				//sh "wget -O k8s-deployment.tpl wget http://www.douyayqz.com/douya/k8s-deployment.tpl"
+				sh "sed -i 's@{server-name}@${params.server_name}@g;s@{k8s-namespace}@${params.k8s_namespace}@g;s@{docker-image}@${docker_iamge_name}@g' deployment.yml"
+				sh "kubectl apply -f deployment.yml"
+			}
+		}
+	}
+}
+
